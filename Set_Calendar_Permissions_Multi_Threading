@@ -1,0 +1,82 @@
+import requests
+import concurrent.futures
+import json
+from datetime import datetime
+
+StartTime = datetime.now()
+
+TenantID = ""
+ClientID = ""
+ClientSecret = ""
+
+Calendar_Permissions = 'read' # The role permissions can be seen here:
+# https://docs.microsoft.com/en-us/graph/api/resources/calendarpermission?view=graph-rest-1.0#calendarroletype-values
+# Permissions is one of the following:
+# none, freeBusyRead, limitedRead, read, write, delegateWithoutPrivateEventAccess, delegateWithPrivateEventAccess, custom
+
+tokenbody = {
+    'Grant_Type': 'client_credentials', 
+    'Scope': 'https://graph.microsoft.com/.default', 
+    'Client_Id': ClientID,
+    'Client_Secret': ClientSecret
+}
+tokenResponse = requests.post(f"https://login.microsoftonline.com/{TenantID}/oauth2/v2.0/token", data=tokenbody)
+tokenResponse = tokenResponse.json()
+token = tokenResponse['access_token']
+
+headers = {
+     'Authorization': f'Bearer {token}',
+     'Content-type': 'application/json'
+}
+url_get = "https://graph.microsoft.com/v1.0/users/"
+Users = requests.get(url_get, headers=headers)
+
+Users = Users.json()
+Users = Users['value']
+
+UserIDList = []
+UserPrinceList = []
+
+for User in Users:
+    UserIDList.append(User['id'])
+    UserPrinceList.append(User['userPrincipalName'])
+
+def SetCalendarPerm(UserID, UserPrinceList):
+    URL_Lic = url_get + UserID + "/licenseDetails"
+    URL_User_Has_Lic = requests.get(URL_Lic, headers=headers)
+    URL_User_Has_Lic = URL_User_Has_Lic.json()
+    if URL_User_Has_Lic['value']:
+        for ServicePlanName in URL_User_Has_Lic['value'][0]['servicePlans']:
+            if "EXCHANGE" in ServicePlanName['servicePlanName'] and "EXCHANGE_ANALYTICS" != ServicePlanName['servicePlanName']:
+                URL_CAL_Permissions = url_get + UserID + "/calendar/calendarPermissions/RGVmYXVsdA=="
+                CAL_URL = requests.get(URL_CAL_Permissions, headers=headers)
+                CAL_URL = CAL_URL.json()
+                if CAL_URL['role'] != Calendar_Permissions:
+                    Set_Cal_Perm = {
+                        'role': Calendar_Permissions
+                    }
+                    Set_Cal_Perm = json.dumps(Set_Cal_Perm)
+                    try:
+                        requests.patch(URL_CAL_Permissions, headers=headers, data=Set_Cal_Perm)
+                        Output_text = "Calendar permissions has been changed from " + CAL_URL['role'] + " to " + Calendar_Permissions + " for the user " + User['userPrincipalName']
+                        return Output_text
+                    except:
+                        Output_text = "Error: Unable to change calendar permissions for the user " + UserPrinceList
+                        return Output_text
+                else:
+                    Output_text = "Permissions is already in place for the user " + UserPrinceList
+                    return Output_text
+            else:
+                Output_text = "The following user does not have a license for exchange and will be skipped " + UserPrinceList
+                return Output_text
+    else:
+        Output_text = "The following user does not have a license for exchange and will be skipped " + UserPrinceList
+        return Output_text
+
+with concurrent.futures.ThreadPoolExecutor() as executor:
+    results = executor.map(SetCalendarPerm, UserIDList, UserPrinceList)
+    for result in results:
+        print(result)
+EndTime = datetime.now()
+Diffrence = EndTime - StartTime
+print(f"Calendar permissions took {Diffrence} to process")
